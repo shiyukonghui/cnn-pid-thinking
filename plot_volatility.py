@@ -1,11 +1,15 @@
 """deep8 × 60 epoch 各变体 test_acc 波动分析图（含两轮全部 8 个变体）。
 
-从 results/deep8_<variant>.csv 读取精度曲线，绘制：
+支持 --dataset cifar10 / cifar100（默认 cifar10），自动选择对应 csv 前缀：
+  cifar10  -> results/deep8_<variant>.csv
+  cifar100 -> results/c100_deep8_<variant>.csv
+从 csv 读取精度曲线，绘制：
   左图：8 个变体的 test_acc 随 epoch 变化（原始曲线）
   右图：滚动窗口波动率（标准差）随 epoch 变化
 分组样式：第一轮 2x2 因子（细线）；第二轮积分修正方案 A/B/C（粗线）
-输出保存到 results/deep8_volatility.png
+输出保存到 results/deep8_volatility.png（cifar100 时为 c100_deep8_volatility.png）
 """
+import argparse
 import csv
 import os
 import statistics as st
@@ -15,6 +19,9 @@ matplotlib.use("Agg")  # 无界面后端，仅保存图片
 import matplotlib.pyplot as plt
 
 RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
+
+# 数据集 -> （csv 前缀，输出图名前缀）
+DATASET_PREFIX = {"cifar10": "", "cifar100": "c100_"}
 
 # 全部 8 个变体：第一轮 4 个 + 第二轮积分修正 4 个
 VARIANTS = ("baseline", "residual", "softmax", "both",
@@ -59,35 +66,43 @@ def rolling_std(xs, window=WINDOW):
 
 
 def main():
+    # 命令行参数：数据集选择（决定 csv 前缀与输出文件名）
+    parser = argparse.ArgumentParser(description="deep8 波动分析图")
+    parser.add_argument("--dataset", choices=tuple(DATASET_PREFIX),
+                        default="cifar10", help="数据集（默认 cifar10）")
+    args = parser.parse_args()
+    prefix = DATASET_PREFIX[args.dataset]
+    title_tag = f"{args.dataset} deep8 x 60ep"
+
     fig, axes = plt.subplots(1, 2, figsize=(15, 5.5))
 
     # ---- 左图：精度曲线 ----
     ax = axes[0]
     for v in VARIANTS:
-        eps, accs = load_acc(os.path.join(RESULTS_DIR, f"deep8_{v}.csv"))
+        eps, accs = load_acc(os.path.join(RESULTS_DIR, f"{prefix}deep8_{v}.csv"))
         lw = 2.2 if v in BOLD_VARIANTS else 1.1  # 第二轮变体用粗线
         ax.plot(eps, accs, label=v, color=COLORS[v], linewidth=lw, alpha=0.9)
     ax.set_xlabel("epoch")
     ax.set_ylabel("test_acc")
-    ax.set_title("deep8 x 60ep: test accuracy curves (round1 + round2)")
+    ax.set_title(f"{title_tag}: test accuracy curves (round1 + round2)")
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8, ncol=2)
 
     # ---- 右图：滚动波动率 ----
     ax = axes[1]
     for v in VARIANTS:
-        eps, accs = load_acc(os.path.join(RESULTS_DIR, f"deep8_{v}.csv"))
+        eps, accs = load_acc(os.path.join(RESULTS_DIR, f"{prefix}deep8_{v}.csv"))
         lw = 2.2 if v in BOLD_VARIANTS else 1.1
         ax.plot(eps, rolling_std(accs), label=v, color=COLORS[v],
                 linewidth=lw, alpha=0.9)
     ax.set_xlabel("epoch")
     ax.set_ylabel(f"rolling std (window={WINDOW})")
-    ax.set_title("deep8 x 60ep: accuracy volatility (round1 + round2)")
+    ax.set_title(f"{title_tag}: accuracy volatility (round1 + round2)")
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8, ncol=2)
 
     fig.tight_layout()
-    out_path = os.path.join(RESULTS_DIR, "deep8_volatility.png")
+    out_path = os.path.join(RESULTS_DIR, f"{prefix}deep8_volatility.png")
     fig.savefig(out_path, dpi=150)
     print(f"已保存: {out_path}")
 

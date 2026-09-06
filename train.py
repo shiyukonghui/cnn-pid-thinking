@@ -17,9 +17,15 @@ import torchvision.transforms as transforms
 
 from models import VARIANT_MAPPING, build_model
 
-# CIFAR-10 各通道均值 / 标准差
-CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
-CIFAR10_STD = (0.2470, 0.2435, 0.2616)
+# 各数据集的类别数与通道均值/标准差（CIFAR-10 与 CIFAR-100 统计相同）
+DATASET_INFO = {
+    "cifar10": dict(num_classes=10,
+                    mean=(0.4914, 0.4822, 0.4465), std=(0.2470, 0.2435, 0.2616)),
+    "cifar100": dict(num_classes=100,
+                     mean=(0.5071, 0.4865, 0.4409), std=(0.2673, 0.2564, 0.2762)),
+}
+# 数据集名 -> csv 文件名前缀（cifar10 保持原有前缀，向后兼容）
+DATASET_PREFIX = {"cifar10": "", "cifar100": "c100_"}
 
 VARIANTS = tuple(VARIANT_MAPPING)  # 从 models.py 动态获取全部变体（含第二轮积分修正变体）
 RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
@@ -50,6 +56,8 @@ def get_args():
                         help="汇总 results/ 下各变体 csv 的最优精度")
     parser.add_argument("--stages", type=int, default=3, choices=(3, 5, 8),
                         help="骨干卷积阶段数（默认 3；5/8 为加深版）")
+    parser.add_argument("--dataset", choices=tuple(DATASET_INFO), default="cifar10",
+                        help="数据集（默认 cifar10，可选 cifar100）")
     parser.add_argument("--seed", type=int, default=42, help="随机种子（默认 42）")
     parser.add_argument("--num-workers", type=int, default=4,
                         help="DataLoader 工作进程数（默认 4，Windows 下仅 CUDA/CPU 加速时生效）")
@@ -68,24 +76,28 @@ def get_args():
     return args
 
 
-def build_dataloaders(batch_size: int, num_workers: int = 0):
-    """构建 CIFAR-10 训练/测试 DataLoader。"""
+def build_dataloaders(dataset: str, batch_size: int, num_workers: int = 0):
+    """构建 CIFAR-10/100 训练/测试 DataLoader。"""
+    info = DATASET_INFO[dataset]
     # 训练集：随机裁剪（四周补 4 像素）+ 随机水平翻转 + 标准化
     train_transform = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD),
+        transforms.Normalize(info["mean"], info["std"]),
     ])
     # 测试集：仅标准化
     test_transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD),
+        transforms.Normalize(info["mean"], info["std"]),
     ])
 
-    train_set = torchvision.datasets.CIFAR10(
+    # 按数据集名选择 torchvision 数据集类
+    dataset_cls = torchvision.datasets.CIFAR10 if dataset == "cifar10" \
+        else torchvision.datasets.CIFAR100
+    train_set = dataset_cls(
         root="./data", train=True, download=True, transform=train_transform)
-    test_set = torchvision.datasets.CIFAR10(
+    test_set = dataset_cls(
         root="./data", train=False, download=True, transform=test_transform)
 
     train_loader = torch.utils.data.DataLoader(
@@ -130,7 +142,8 @@ def run_training(args):
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     print(f"使用设备: {device}  骨干: {args.stages} 阶段  AMP: {'开' if use_amp else '关'}")
 
-    model = build_model(args.variant, num_stages=args.stages).to(device)
+    model = build_model(args.variant, num_stages=args.stages,
+                        num_classes=DATASET_INFO[args.dataset]["num_classes"]).to(device)
 
     # 优化器：sgd 默认带动量与 weight_decay（长训练极限性能更稳定），adam 保持原样
     if args.optimizer == "adam":
@@ -149,10 +162,13 @@ def run_training(args):
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=max(args.epochs - warmup, 1), eta_min=args.lr * 1e-3)
 
-    train_loader, test_loader = build_dataloaders(args.batch_size, args.num_workers)
+    train_loader, test_loader = build_dataloaders(
+        args.dataset, args.batch_size, args.num_workers)
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    name_prefix = STAGE_PREFIX.get(args.stages, f"deep{args.stages}_")
+    # csv 文件名 = 数据集前缀 + 深度前缀 + 变体名（cifar10 保持原样，cifar100 为 c100_）
+    name_prefix = (DATASET_PREFIX.get(args.dataset, f"{args.dataset}_")
+                   + STAGE_PREFIX.get(args.stages, f"deep{args.stages}_"))
     csv_path = os.path.join(RESULTS_DIR, f"{name_prefix}{args.variant}.csv")
     # 追加写模式：若文件不存在则先写入表头
     need_header = not os.path.exists(csv_path)
@@ -208,7 +224,9 @@ def summarize():
     """
     os.makedirs(RESULTS_DIR, exist_ok=True)
     rows = []
-    prefix = STAGE_PREFIX.get(args.stages_global, "")
+    # 与训练侧一致：数据集前缀 + 深度前缀
+    prefix = (DATASET_PREFIX.get(args.stages_global_dataset, "")
+              + STAGE_PREFIX.get(args.stages_global, ""))
     for variant in VARIANTS:
         path = os.path.join(RESULTS_DIR, f"{prefix}{variant}.csv")
         if not os.path.exists(path):
@@ -245,8 +263,9 @@ def summarize():
 def main():
     global DEEP_MODE, args
     args = get_args()
-    # summarize() 里通过全局变量获取 stages 前缀
+    # summarize() 里通过全局变量获取 stages / dataset 前缀
     args.stages_global = args.stages
+    args.stages_global_dataset = args.dataset
     DEEP_MODE = (args.stages != 3)
     if args.summarize:
         summarize()

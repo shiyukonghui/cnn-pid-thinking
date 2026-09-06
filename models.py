@@ -62,7 +62,8 @@ class SumNorm(nn.Module):
     def forward(self, x):
         # 通道维均方（求和语义的归一化形式）
         ms = x.pow(2).mean(dim=1, keepdim=True)          # (B,1,H,W)
-        return x / (self.k + ms).pow(self.beta.abs() + 1e-6)
+        # k 取绝对值保证分母恒为正，避免可学习 k 变负后出现负底数幂 -> NaN
+        return x / (self.k.abs() + ms).pow(self.beta.abs() + 1e-6)
 
 
 class Stage(nn.Module):
@@ -153,7 +154,8 @@ class PidAblationCNN(nn.Module):
 
     def __init__(self, use_residual: bool = False, use_softmax: bool = False,
                  num_stages: int = 3, use_sumnorm: bool = False,
-                 use_integral: bool = False, use_pid_head: bool = False):
+                 use_integral: bool = False, use_pid_head: bool = False,
+                 num_classes: int = NUM_CLASSES):
         super().__init__()
         self.use_residual = use_residual
         self.use_softmax = use_softmax
@@ -191,12 +193,12 @@ class PidAblationCNN(nn.Module):
                 nn.Parameter(torch.zeros(1)) for _ in range(len(channels) - 2)
             ])
 
-        # 分类头：全局平均池化 -> 展平 -> 全连接
+        # 分类头：全局平均池化 -> 展平 -> 全连接（类别数由数据集决定）
         head_in = channels[-1] * (2 if use_pid_head else 1)  # pid_full：拼接累积状态
         self.head = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
-            nn.Linear(head_in, NUM_CLASSES),
+            nn.Linear(head_in, num_classes),
         )
 
     def forward(self, x):
@@ -247,16 +249,19 @@ VARIANT_MAPPING = {
 }
 
 
-def build_model(variant: str, num_stages: int = 3) -> PidAblationCNN:
+def build_model(variant: str, num_stages: int = 3,
+                num_classes: int = NUM_CLASSES) -> PidAblationCNN:
     """工厂函数：variant -> PidAblationCNN。
 
     num_stages: 3 / 5 / 8，选择骨干深度
+    num_classes: 分类头输出类别数（CIFAR-10=10 / CIFAR-100=100）
     """
     if variant not in VARIANT_MAPPING:
         raise ValueError(f"未知变体: {variant!r}，可选: {sorted(VARIANT_MAPPING)}")
     if num_stages not in (3, 5, 8):
         raise ValueError(f"num_stages 仅支持 3 / 5 / 8，实际: {num_stages}")
-    return PidAblationCNN(num_stages=num_stages, **VARIANT_MAPPING[variant])
+    return PidAblationCNN(num_stages=num_stages, num_classes=num_classes,
+                          **VARIANT_MAPPING[variant])
 
 
 if __name__ == "__main__":
