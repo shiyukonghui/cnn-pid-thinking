@@ -1,0 +1,5 @@
+variant,best_test_acc
+baseline,0.8406
+residual,0.8448
+softmax,0.8341
+both,0.8275
