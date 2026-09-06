@@ -3,3 +3,7 @@ baseline,0.9262
 residual,0.9307
 softmax,0.9263
 both,0.9233
+integral,0.9259
+pid_full,0.9300
+sumnorm,0.8659
+sumnorm_residual,0.9310

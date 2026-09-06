@@ -177,13 +177,14 @@ class PidAblationCNN(nn.Module):
                 LeakyIntegrator(channels[i + 1])
                 for i in range(len(channels) - 1)
             ])
-            # 桥接：把阶段 i 的累积状态 S 投影到阶段 i+1 的输入宽度（1x1 conv + BN）
+            # 桥接：积分更新前，把 S 从上一阶段宽度 channels[i] 投影到当前阶段输出宽度
+            # channels[i+1]（1x1 conv + BN）；注入下一阶段时 S 已与其输入同宽，无需再投影
             self.bridges = nn.ModuleList([
                 nn.Sequential(
-                    nn.Conv2d(channels[i + 1], channels[i + 1], kernel_size=1, bias=False),
+                    nn.Conv2d(channels[i], channels[i + 1], kernel_size=1, bias=False),
                     nn.BatchNorm2d(channels[i + 1]),
                 )
-                for i in range(len(channels) - 2)
+                for i in range(1, len(channels) - 1)
             ])
             # 积分状态注入下一阶段的门控（gated add），初始门接近 0 以稳定训练
             self.inj_gates = nn.ParameterList([
@@ -201,19 +202,22 @@ class PidAblationCNN(nn.Module):
     def forward(self, x):
         if self.use_integral:
             s = None  # 跨阶段累积状态
-            n = len(self.stages)
             for i, stage in enumerate(self.stages):
+                # 注入：把上一阶段的累积状态门控加到本阶段输入（S 与输入天然同宽同尺寸）
                 if s is not None:
-                    # 空间尺寸对齐（池化阶段间可能变化）+ 桥接投影 + 门控注入
-                    s_in = self.bridges[i - 1](s)
-                    if s_in.shape[-2:] != x.shape[-2:]:
-                        s_in = nn.functional.adaptive_avg_pool2d(
-                            s_in, x.shape[-2:])
-                    x = x + torch.sigmoid(self.inj_gates[i - 1]) * s_in
+                    x = x + torch.sigmoid(self.inj_gates[i - 1]) * s
+                # 主通路前向
                 x = stage(x)
                 # 更新累积状态：S ← α·S + (1−α)·stage_out（首阶段 S 从零开始）
-                s = self.integrators[i](s, x) if s is not None \
-                    else self.integrators[i](torch.zeros_like(x), x)
+                if s is not None:
+                    # 桥接：把 S 从上一阶段宽度投影到当前阶段输出宽度，并做空间对齐
+                    s_proj = self.bridges[i - 1](s)
+                    if s_proj.shape[-2:] != x.shape[-2:]:
+                        s_proj = nn.functional.adaptive_avg_pool2d(
+                            s_proj, x.shape[-2:])
+                    s = self.integrators[i](s_proj, x)
+                else:
+                    s = self.integrators[i](torch.zeros_like(x), x)
             if self.use_pid_head:
                 # 完整 PID：比例（主通路特征）+ 积分（累积状态）拼接后线性映射
                 x = torch.cat([x, s], dim=1)
@@ -284,10 +288,11 @@ if __name__ == "__main__":
                     f"{variant}: 通道和偏离 1，实际范围 [{sums.min():.6f}, {sums.max():.6f}]"
                 print(f"  校验: 阶段1 softmax 后通道和 = {sums.mean().item():.6f} (期望 ≈ 1)")
 
-            # integral 变体：校验泄漏系数在 (0,1)
+            # integral 变体：校验泄漏系数逐通道均在 (0,1)
             if model.use_integral:
                 for integ in model.integrators:
                     a = torch.sigmoid(integ.alpha_logit)
-                    assert 0.0 < a.item() < 1.0, f"泄漏系数越界: {a.item()}"
+                    assert (a > 0.0).all() and (a < 1.0).all(), \
+                        f"泄漏系数越界: min={a.min().item()}, max={a.max().item()}"
 
     print("冒烟测试全部通过")
