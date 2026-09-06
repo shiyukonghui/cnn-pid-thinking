@@ -1,0 +1,9 @@
+variant,best_test_acc
+baseline,0.7135
+residual,0.7456
+softmax,0.3430
+both,0.4889
+integral,0.7204
+pid_full,0.7292
+sumnorm,0.6959
+sumnorm_residual,0.7179

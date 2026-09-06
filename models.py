@@ -28,6 +28,12 @@ STAGE_CHANNELS_DEEP = (3, 32, 32, 64, 128, 256)  # 5 阶段：32->16->8->4->2（
 STAGE_CHANNELS_DEEP8 = (3, 32, 32, 32, 64, 64, 128, 256, 256)
 # 8 阶段各阶段是否在末尾池化（False 表示该阶段保持空间尺寸）
 STAGE_POOL_DEEP8 = (False, False, False, True, True, True, True, True)
+# 12 阶段：前 4 阶段不下采样（32x32、通道恒定 32），后 8 阶段中 6 次池化：32->16->16->8->8->4->4
+# 空间共池化 6 次（与 8 阶段骨干终点一致），避免池化到 0 尺寸
+STAGE_CHANNELS_DEEP12 = (3, 32, 32, 32, 32, 64, 64, 128, 128, 256, 256, 256, 256)
+# 12 阶段各阶段是否在末尾池化（5 次池化：第 4/5/8/9/11 阶段 -> 终点 4x4）
+STAGE_POOL_DEEP12 = (False, False, False, False, True, True, False,
+                     False, True, True, False, True)
 NUM_CLASSES = 10
 
 
@@ -164,9 +170,15 @@ class PidAblationCNN(nn.Module):
         self.use_pid_head = use_pid_head
 
         channels = STAGE_CHANNELS_DEEP8 if num_stages == 8 else \
-            (STAGE_CHANNELS_DEEP if num_stages == 5 else STAGE_CHANNELS)
-        # 8 阶段骨干：按 STAGE_POOL_DEEP8 决定各阶段是否池化；3/5 阶段全部池化
-        pool_flags = STAGE_POOL_DEEP8 if num_stages == 8 else (True,) * (len(channels) - 1)
+            (STAGE_CHANNELS_DEEP12 if num_stages == 12 else
+             (STAGE_CHANNELS_DEEP if num_stages == 5 else STAGE_CHANNELS))
+        # 深骨干（8/12 阶段）：按对应 POOL 计划决定各阶段是否池化；3/5 阶段全部池化
+        if num_stages == 8:
+            pool_flags = STAGE_POOL_DEEP8
+        elif num_stages == 12:
+            pool_flags = STAGE_POOL_DEEP12
+        else:
+            pool_flags = (True,) * (len(channels) - 1)
         self.stages = nn.ModuleList([
             Stage(channels[i], channels[i + 1], use_residual, use_softmax,
                   use_pool=pool_flags[i], use_sumnorm=use_sumnorm)
@@ -253,13 +265,13 @@ def build_model(variant: str, num_stages: int = 3,
                 num_classes: int = NUM_CLASSES) -> PidAblationCNN:
     """工厂函数：variant -> PidAblationCNN。
 
-    num_stages: 3 / 5 / 8，选择骨干深度
+    num_stages: 3 / 5 / 8 / 12，选择骨干深度
     num_classes: 分类头输出类别数（CIFAR-10=10 / CIFAR-100=100）
     """
     if variant not in VARIANT_MAPPING:
         raise ValueError(f"未知变体: {variant!r}，可选: {sorted(VARIANT_MAPPING)}")
-    if num_stages not in (3, 5, 8):
-        raise ValueError(f"num_stages 仅支持 3 / 5 / 8，实际: {num_stages}")
+    if num_stages not in (3, 5, 8, 12):
+        raise ValueError(f"num_stages 仅支持 3 / 5 / 8 / 12，实际: {num_stages}")
     return PidAblationCNN(num_stages=num_stages, num_classes=num_classes,
                           **VARIANT_MAPPING[variant])
 
@@ -270,7 +282,7 @@ if __name__ == "__main__":
     torch.manual_seed(0)
     x = torch.randn(2, 3, 32, 32)
 
-    for num_stages in (3, 5, 8):
+    for num_stages in (3, 5, 8, 12):
         for variant in VARIANT_MAPPING:
             model = build_model(variant, num_stages=num_stages)
             model.eval()

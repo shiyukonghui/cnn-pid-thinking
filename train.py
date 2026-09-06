@@ -31,7 +31,7 @@ VARIANTS = tuple(VARIANT_MAPPING)  # 从 models.py 动态获取全部变体（�
 RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
 DEEP_MODE = False  # --summarize 时标记是否汇总更深层（deep5_/deep8_ 前缀）结果
 # 文件名前缀与 stages 的映射（3 阶段无前缀，保持向后兼容）
-STAGE_PREFIX = {3: "", 5: "deep5_", 8: "deep8_"}
+STAGE_PREFIX = {3: "", 5: "deep5_", 8: "deep8_", 12: "deep12_"}
 
 
 def set_seed(seed: int):
@@ -54,8 +54,8 @@ def get_args():
                         help="优化器（默认 adam）")
     parser.add_argument("--summarize", action="store_true",
                         help="汇总 results/ 下各变体 csv 的最优精度")
-    parser.add_argument("--stages", type=int, default=3, choices=(3, 5, 8),
-                        help="骨干卷积阶段数（默认 3；5/8 为加深版）")
+    parser.add_argument("--stages", type=int, default=3, choices=(3, 5, 8, 12),
+                        help="骨干卷积阶段数（默认 3；5/8/12 为加深版）")
     parser.add_argument("--dataset", choices=tuple(DATASET_INFO), default="cifar10",
                         help="数据集（默认 cifar10，可选 cifar100）")
     parser.add_argument("--seed", type=int, default=42, help="随机种子（默认 42）")
